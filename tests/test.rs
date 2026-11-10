@@ -1,11 +1,22 @@
 #![cfg_attr(
     async_trait_nightly_testing,
-    feature(min_specialization, min_const_generics)
+    feature(impl_trait_in_assoc_type, min_specialization)
 )]
+#![deny(rust_2021_compatibility, unused_qualifications)]
 #![allow(
-    clippy::let_underscore_drop,
+    clippy::elidable_lifetime_names,
+    clippy::incompatible_msrv, // https://github.com/rust-lang/rust-clippy/issues/12257
+    clippy::let_underscore_untyped,
     clippy::let_unit_value,
-    clippy::trivially_copy_pass_by_ref
+    clippy::missing_panics_doc,
+    clippy::missing_safety_doc,
+    clippy::mut_mut,
+    clippy::needless_lifetimes,
+    clippy::needless_return,
+    clippy::non_minimal_cfg,
+    clippy::trivially_copy_pass_by_ref,
+    clippy::uninlined_format_args,
+    clippy::unused_async
 )]
 
 use async_trait::async_trait;
@@ -99,48 +110,48 @@ pub async fn test() {
     s.calls_mut().await;
 }
 
-pub async fn test_object_safe_without_default() {
+pub async fn test_dyn_compatible_without_default() {
     #[async_trait]
-    trait ObjectSafe {
+    trait DynCompatible {
         async fn f(&self);
     }
 
     #[async_trait]
-    impl ObjectSafe for Struct {
+    impl DynCompatible for Struct {
         async fn f(&self) {}
     }
 
-    let object = &Struct as &dyn ObjectSafe;
+    let object = &Struct as &dyn DynCompatible;
     object.f().await;
 }
 
-pub async fn test_object_safe_with_default() {
+pub async fn test_dyn_compatible_with_default() {
     #[async_trait]
-    trait ObjectSafe: Sync {
+    trait DynCompatible: Sync {
         async fn f(&self) {}
     }
 
     #[async_trait]
-    impl ObjectSafe for Struct {
+    impl DynCompatible for Struct {
         async fn f(&self) {}
     }
 
-    let object = &Struct as &dyn ObjectSafe;
+    let object = &Struct as &dyn DynCompatible;
     object.f().await;
 }
 
-pub async fn test_object_no_send() {
+pub async fn test_dyn_compatible_no_send() {
     #[async_trait(?Send)]
-    trait ObjectSafe: Sync {
+    trait DynCompatible: Sync {
         async fn f(&self) {}
     }
 
     #[async_trait(?Send)]
-    impl ObjectSafe for Struct {
+    impl DynCompatible for Struct {
         async fn f(&self) {}
     }
 
-    let object = &Struct as &dyn ObjectSafe;
+    let object = &Struct as &dyn DynCompatible;
     object.f().await;
 }
 
@@ -151,17 +162,106 @@ pub unsafe trait UnsafeTrait {}
 unsafe impl UnsafeTrait for () {}
 
 #[async_trait]
+#[allow(dead_code)]
 pub(crate) unsafe trait UnsafeTraitPubCrate {}
 
 #[async_trait]
+#[allow(dead_code)]
 unsafe trait UnsafeTraitPrivate {}
+
+pub async fn test_can_destruct() {
+    #[async_trait]
+    trait CanDestruct {
+        async fn f(&self, foos: (u8, u8, u8, u8));
+    }
+
+    #[async_trait]
+    impl CanDestruct for Struct {
+        async fn f(&self, (a, ref mut b, ref c, d): (u8, u8, u8, u8)) {
+            let _a: u8 = a;
+            let _b: &mut u8 = b;
+            let _c: &u8 = c;
+            let _d: u8 = d;
+        }
+    }
+
+    let _ = <Struct as CanDestruct>::f;
+}
+
+pub async fn test_self_in_macro() {
+    #[async_trait]
+    trait Trait {
+        async fn a(self);
+        async fn b(&mut self);
+        async fn c(&self);
+    }
+
+    #[async_trait]
+    impl Trait for String {
+        async fn a(self) {
+            println!("{}", self);
+        }
+        async fn b(&mut self) {
+            println!("{}", self);
+        }
+        async fn c(&self) {
+            println!("{}", self);
+        }
+    }
+
+    let _ = <String as Trait>::a;
+    let _ = <String as Trait>::b;
+    let _ = <String as Trait>::c;
+}
+
+pub async fn test_inference() {
+    #[async_trait]
+    pub trait Trait {
+        async fn f() -> Box<dyn Iterator<Item = ()>> {
+            Box::new(std::iter::empty())
+        }
+    }
+
+    impl Trait for () {}
+
+    let _ = <() as Trait>::f;
+}
+
+pub async fn test_internal_items() {
+    #[async_trait]
+    #[allow(dead_code, clippy::items_after_statements)]
+    pub trait Trait: Sized {
+        async fn f(self) {
+            struct Struct;
+
+            impl Struct {
+                fn f(self) {
+                    let _ = self;
+                }
+            }
+        }
+    }
+}
+
+pub async fn test_unimplemented() {
+    #[async_trait]
+    pub trait Trait {
+        async fn f() {
+            unimplemented!()
+        }
+    }
+
+    impl Trait for () {}
+
+    let _ = <() as Trait>::f;
+}
 
 // https://github.com/dtolnay/async-trait/issues/1
 pub mod issue1 {
     use async_trait::async_trait;
 
     #[async_trait]
-    trait Issue1 {
+    pub trait Issue1 {
         async fn f<U>(&self);
     }
 
@@ -205,11 +305,11 @@ pub mod issue11 {
     use std::sync::Arc;
 
     #[async_trait]
-    trait Issue11 {
+    pub trait Issue11 {
         async fn example(self: Arc<Self>);
     }
 
-    struct Struct;
+    pub struct Struct;
 
     #[async_trait]
     impl Issue11 for Struct {
@@ -222,10 +322,10 @@ pub mod issue15 {
     use async_trait::async_trait;
     use std::marker::PhantomData;
 
-    trait Trait {}
+    pub trait Trait {}
 
     #[async_trait]
-    trait Issue15 {
+    pub trait Issue15 {
         async fn myfn(&self, _: PhantomData<dyn Trait + Send>) {}
     }
 }
@@ -235,12 +335,12 @@ pub mod issue17 {
     use async_trait::async_trait;
 
     #[async_trait]
-    trait Issue17 {
+    pub trait Issue17 {
         async fn f(&self);
     }
 
-    struct Struct {
-        string: String,
+    pub struct Struct {
+        pub string: String,
     }
 
     #[async_trait]
@@ -267,6 +367,7 @@ pub mod issue23 {
         }
     }
 
+    #[allow(dead_code)]
     struct S {}
 
     #[async_trait]
@@ -330,10 +431,10 @@ pub mod issue25 {
 pub mod issue28 {
     use async_trait::async_trait;
 
-    struct Str<'a>(&'a str);
+    pub struct Str<'a>(&'a str);
 
     #[async_trait]
-    trait Trait1<'a> {
+    pub trait Trait1<'a> {
         async fn f(x: Str<'a>) -> &'a str;
         async fn g(x: Str<'a>) -> &'a str {
             x.0
@@ -348,7 +449,7 @@ pub mod issue28 {
     }
 
     #[async_trait]
-    trait Trait2 {
+    pub trait Trait2 {
         async fn f();
     }
 
@@ -358,7 +459,7 @@ pub mod issue28 {
     }
 
     #[async_trait]
-    trait Trait3<'a, 'b> {
+    pub trait Trait3<'a, 'b> {
         async fn f(_: &'a &'b ()); // chain 'a and 'b
         async fn g(_: &'b ()); // chain 'b only
         async fn h(); // do not chain
@@ -596,7 +697,7 @@ pub mod issue53 {
     use async_trait::async_trait;
 
     pub struct Unit;
-    pub struct Tuple(u8);
+    pub struct Tuple(pub u8);
     pub struct Struct {
         pub x: u8,
     }
@@ -636,7 +737,6 @@ pub mod issue53 {
 }
 
 // https://github.com/dtolnay/async-trait/issues/57
-#[cfg(async_trait_nightly_testing)]
 pub mod issue57 {
     use crate::executor;
     use async_trait::async_trait;
@@ -662,7 +762,6 @@ pub mod issue57 {
 
 // https://github.com/dtolnay/async-trait/issues/68
 pub mod issue68 {
-    #[rustversion::since(1.40)] // procedural macros cannot expand to macro definitions in 1.39.
     #[async_trait::async_trait]
     pub trait Example {
         async fn method(&self) {
@@ -784,17 +883,17 @@ pub mod issue87 {
 
 // https://github.com/dtolnay/async-trait/issues/89
 pub mod issue89 {
-    #![allow(bare_trait_objects)]
+    #![allow(bare_trait_objects, unused_parens)]
 
     use async_trait::async_trait;
 
     #[async_trait]
-    trait Trait {
+    pub trait Trait {
         async fn f(&self);
     }
 
     #[async_trait]
-    impl Trait for Send + Sync {
+    impl Trait for dyn Send + Sync {
         async fn f(&self) {}
     }
 
@@ -836,7 +935,7 @@ pub mod issue92 {
         const ASSOCIATED2: &'static str;
         type Associated2;
 
-        #[allow(path_statements, clippy::no_effect)]
+        #[allow(path_statements, clippy::let_underscore_future, clippy::no_effect)]
         async fn associated2(&self) {
             // trait items
             mac!(let _: Self::Associated2;);
@@ -859,7 +958,7 @@ pub mod issue92 {
         const ASSOCIATED2: &'static str = "2";
         type Associated2 = ();
 
-        #[allow(path_statements, clippy::no_effect)]
+        #[allow(path_statements, clippy::let_underscore_future, clippy::no_effect)]
         async fn associated2(&self) {
             // inherent items
             mac!(Self::ASSOCIATED1;);
@@ -868,7 +967,7 @@ pub mod issue92 {
             mac!(let _ = <Self>::associated1(););
 
             // trait items
-            mac!(let _: <Self as Trait>::Associated2;);
+            mac!(let (): <Self as Trait>::Associated2;);
             mac!(Self::ASSOCIATED2;);
             mac!(<Self>::ASSOCIATED2;);
             mac!(<Self as Trait>::ASSOCIATED2;);
@@ -925,7 +1024,7 @@ pub mod issue104 {
     use async_trait::async_trait;
 
     #[async_trait]
-    trait T1 {
+    pub trait T1 {
         async fn id(&self) -> i32;
     }
 
@@ -940,7 +1039,7 @@ pub mod issue104 {
         };
     }
 
-    struct Foo;
+    pub struct Foo;
 
     impl_t1!(Foo, 1);
 }
@@ -961,9 +1060,9 @@ pub mod issue106 {
     }
 
     #[async_trait]
-    impl<P: ?Sized> ProcessPool for &P
+    impl<P> ProcessPool for &P
     where
-        P: ProcessPool,
+        P: ?Sized + ProcessPool,
     {
         type ThreadPool = P::ThreadPool;
 
@@ -979,8 +1078,6 @@ pub mod issue106 {
 
 // https://github.com/dtolnay/async-trait/issues/110
 pub mod issue110 {
-    #![deny(clippy::all)]
-
     use async_trait::async_trait;
     use std::marker::PhantomData;
 
@@ -1006,7 +1103,7 @@ pub mod issue120 {
     use async_trait::async_trait;
 
     #[async_trait]
-    trait Trait {
+    pub trait Trait {
         async fn f(&self);
     }
 
@@ -1021,7 +1118,7 @@ pub mod issue123 {
     use async_trait::async_trait;
 
     #[async_trait]
-    trait Trait<T = ()> {
+    pub trait Trait<T = ()> {
         async fn f(&self) -> &str
         where
             T: 'async_trait,
@@ -1036,8 +1133,6 @@ pub mod issue123 {
 
 // https://github.com/dtolnay/async-trait/issues/129
 pub mod issue129 {
-    #![deny(clippy::pedantic)]
-
     use async_trait::async_trait;
 
     #[async_trait]
@@ -1058,12 +1153,11 @@ pub mod issue129 {
 }
 
 // https://github.com/dtolnay/async-trait/issues/134
-#[cfg(async_trait_nightly_testing)]
 pub mod issue134 {
     use async_trait::async_trait;
 
     #[async_trait]
-    trait TestTrait {
+    pub trait TestTrait {
         async fn run<const DUMMY: bool>(self)
         where
             Self: Sized,
@@ -1079,6 +1173,577 @@ pub mod issue134 {
         where
             Self: Sized,
         {
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/pull/125#pullrequestreview-491880881
+pub mod drop_order {
+    use crate::executor;
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Flagger<'a>(&'a AtomicBool);
+
+    impl Drop for Flagger<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_xor(true, Ordering::AcqRel);
+        }
+    }
+
+    #[async_trait]
+    trait Trait {
+        async fn async_trait(_: Flagger<'_>, flag: &AtomicBool);
+    }
+
+    struct Struct;
+
+    #[async_trait]
+    impl Trait for Struct {
+        async fn async_trait(_: Flagger<'_>, flag: &AtomicBool) {
+            flag.fetch_or(true, Ordering::AcqRel);
+        }
+    }
+
+    async fn standalone(_: Flagger<'_>, flag: &AtomicBool) {
+        flag.fetch_or(true, Ordering::AcqRel);
+    }
+
+    #[async_trait]
+    trait SelfTrait {
+        async fn async_trait(self, flag: &AtomicBool);
+    }
+
+    #[async_trait]
+    impl SelfTrait for Flagger<'_> {
+        async fn async_trait(self, flag: &AtomicBool) {
+            flag.fetch_or(true, Ordering::AcqRel);
+        }
+    }
+
+    #[test]
+    fn test_drop_order() {
+        // 0 : 0 ^ 1 = 1 | 1 = 1 (if flagger then block)
+        // 0 : 0 | 1 = 1 ^ 1 = 0 (if block then flagger)
+
+        let flag = AtomicBool::new(false);
+        executor::block_on_simple(standalone(Flagger(&flag), &flag));
+        assert!(!flag.load(Ordering::Acquire));
+
+        executor::block_on_simple(Struct::async_trait(Flagger(&flag), &flag));
+        assert!(!flag.load(Ordering::Acquire));
+
+        executor::block_on_simple(Flagger(&flag).async_trait(&flag));
+        assert!(!flag.load(Ordering::Acquire));
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/145
+pub mod issue145 {
+    #![deny(clippy::type_complexity)]
+
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait ManageConnection: Sized + Send + Sync + 'static {
+        type Connection: Send + 'static;
+        type Error: Send + 'static;
+
+        async fn connect(&self) -> Result<Self::Connection, Self::Error>;
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/147
+pub mod issue147 {
+    #![deny(clippy::let_unit_value)]
+
+    use async_trait::async_trait;
+
+    pub struct MyType;
+
+    #[async_trait]
+    pub trait MyTrait {
+        async fn x();
+        async fn y() -> ();
+        async fn z();
+    }
+
+    #[async_trait]
+    impl MyTrait for MyType {
+        async fn x() {}
+        async fn y() -> () {}
+        async fn z() {
+            unimplemented!()
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/149
+pub mod issue149 {
+    use async_trait::async_trait;
+
+    pub struct Thing;
+    pub trait Ret {}
+    impl Ret for Thing {}
+
+    pub async fn ok() -> &'static dyn Ret {
+        return &Thing;
+    }
+
+    #[async_trait]
+    pub trait Trait {
+        async fn fail() -> &'static dyn Ret {
+            return &Thing;
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/152
+#[cfg(async_trait_nightly_testing)]
+pub mod issue152 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Trait {
+        type Assoc;
+
+        async fn f(&self) -> Self::Assoc;
+    }
+
+    pub struct Struct;
+
+    #[async_trait]
+    impl Trait for Struct {
+        type Assoc = impl Sized;
+
+        async fn f(&self) -> Self::Assoc {}
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/154
+pub mod issue154 {
+    #![deny(clippy::items_after_statements)]
+
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait MyTrait {
+        async fn f(&self);
+    }
+
+    pub struct Struct;
+
+    #[async_trait]
+    impl MyTrait for Struct {
+        async fn f(&self) {
+            const MAX: u16 = 128;
+            println!("{}", MAX);
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/158
+pub mod issue158 {
+    use async_trait::async_trait;
+
+    fn f() {}
+
+    #[async_trait]
+    #[allow(unused_qualifications)]
+    pub trait Trait {
+        async fn f(&self) {
+            self::f();
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/161
+#[allow(clippy::mut_mut)]
+pub mod issue161 {
+    use async_trait::async_trait;
+    use futures::future::FutureExt;
+    use std::sync::Arc;
+
+    #[async_trait]
+    pub trait Trait {
+        async fn f(self: Arc<Self>);
+    }
+
+    pub struct MyStruct(bool);
+
+    #[async_trait]
+    impl Trait for MyStruct {
+        async fn f(self: Arc<Self>) {
+            futures::select! {
+                () = async {
+                    println!("{}", self.0);
+                }.fuse() => {}
+            }
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/169
+pub mod issue169 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    #[allow(unused_qualifications)]
+    pub trait Trait: ::core::marker::Sync {
+        async fn f(&self) {}
+    }
+
+    pub fn test(_t: &dyn Trait) {}
+}
+
+// https://github.com/dtolnay/async-trait/issues/177
+pub mod issue177 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Trait {
+        async fn foo(&self, _callback: impl FnMut(&str) + Send) {}
+    }
+
+    pub struct Struct;
+
+    #[async_trait]
+    impl Trait for Struct {
+        async fn foo(&self, _callback: impl FnMut(&str) + Send) {}
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/183
+pub mod issue183 {
+    #![deny(clippy::shadow_same)]
+
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Foo {
+        async fn foo(_n: i32) {}
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/199
+pub mod issue199 {
+    use async_trait::async_trait;
+    use std::cell::Cell;
+
+    struct IncrementOnDrop<'a>(&'a Cell<usize>);
+
+    impl<'a> Drop for IncrementOnDrop<'a> {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    #[async_trait(?Send)]
+    trait Trait {
+        async fn f(counter: &Cell<usize>, arg: IncrementOnDrop<'_>);
+    }
+
+    struct Struct;
+
+    #[async_trait(?Send)]
+    impl Trait for Struct {
+        async fn f(counter: &Cell<usize>, _: IncrementOnDrop<'_>) {
+            assert_eq!(counter.get(), 0); // second arg not dropped yet
+        }
+    }
+
+    #[test]
+    fn test() {
+        let counter = Cell::new(0);
+        let future = Struct::f(&counter, IncrementOnDrop(&counter));
+        assert_eq!(counter.get(), 0);
+        drop(future);
+        assert_eq!(counter.get(), 1);
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/204
+pub mod issue204 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Trait {
+        async fn f(arg: &impl Trait);
+        async fn g(arg: *const impl Trait);
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/210
+pub mod issue210 {
+    use async_trait::async_trait;
+    use std::sync::Arc;
+
+    #[async_trait]
+    pub trait Trait {
+        async fn f(self: Arc<Self>) {}
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/226
+pub mod issue226 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Trait {
+        async fn cfg_param(&self, param: u8);
+        async fn cfg_param_wildcard(&self, _: u8);
+        async fn cfg_param_tuple(&self, (left, right): (u8, u8));
+    }
+
+    #[allow(dead_code)]
+    struct Struct;
+
+    #[async_trait]
+    impl Trait for Struct {
+        async fn cfg_param(&self, #[cfg(any())] param: u8, #[cfg(all())] _unused: u8) {}
+
+        async fn cfg_param_wildcard(&self, #[cfg(any())] _: u8, #[cfg(all())] _: u8) {}
+
+        async fn cfg_param_tuple(
+            &self,
+            #[cfg(any())] (left, right): (u8, u8),
+            #[cfg(all())] (_left, _right): (u8, u8),
+        ) {
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/232
+pub mod issue232 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Generic<T> {
+        async fn take_ref(&self, thing: &T);
+    }
+
+    pub struct One;
+
+    #[async_trait]
+    impl<T> Generic<T> for One {
+        async fn take_ref(&self, _: &T) {}
+    }
+
+    pub struct Two;
+
+    #[async_trait]
+    impl<T: Sync> Generic<(T, T)> for Two {
+        async fn take_ref(&self, (a, b): &(T, T)) {
+            let _ = a;
+            let _ = b;
+        }
+    }
+
+    pub struct Three;
+
+    #[async_trait]
+    impl<T> Generic<(T, T, T)> for Three {
+        async fn take_ref(&self, (_a, _b, _c): &(T, T, T)) {}
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/234
+pub mod issue234 {
+    use async_trait::async_trait;
+
+    pub struct Droppable;
+
+    impl Drop for Droppable {
+        fn drop(&mut self) {}
+    }
+
+    pub struct Tuple<T, U>(T, U);
+
+    #[async_trait]
+    pub trait Trait {
+        async fn f(arg: Tuple<Droppable, i32>);
+    }
+
+    pub struct UnderscorePattern;
+
+    #[async_trait]
+    impl Trait for UnderscorePattern {
+        async fn f(Tuple(_, _int): Tuple<Droppable, i32>) {}
+    }
+
+    pub struct DotDotPattern;
+
+    #[async_trait]
+    impl Trait for DotDotPattern {
+        async fn f(Tuple { 1: _int, .. }: Tuple<Droppable, i32>) {}
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/236
+pub mod issue236 {
+    #![deny(clippy::async_yields_async)]
+    #![allow(clippy::manual_async_fn)]
+
+    use async_trait::async_trait;
+    use std::future::{self, Future, Ready};
+
+    // Does not trigger the lint.
+    pub async fn async_fn() -> Ready<()> {
+        future::ready(())
+    }
+
+    #[allow(clippy::async_yields_async)]
+    pub fn impl_future_fn() -> impl Future<Output = Ready<()>> {
+        async { future::ready(()) }
+    }
+
+    // The async_trait attribute turns the former into the latter, so we make it
+    // put its own allow(async_yeilds_async) to remain consistent with async fn.
+    #[async_trait]
+    pub trait Trait {
+        async fn f() -> Ready<()> {
+            future::ready(())
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/238
+pub mod issue238 {
+    #![deny(single_use_lifetimes)]
+
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Trait {
+        async fn f();
+    }
+
+    pub struct Struct;
+
+    #[async_trait]
+    impl Trait for &Struct {
+        async fn f() {}
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/266
+#[cfg(async_trait_nightly_testing)]
+pub mod issue266 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Trait {
+        async fn f() -> !;
+    }
+
+    #[async_trait]
+    impl Trait for () {
+        async fn f() -> ! {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/277
+pub mod issue277 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Trait {
+        async fn f(&self);
+    }
+
+    #[async_trait]
+    impl Trait for () {
+        async fn f(mut self: &Self) {
+            g(&mut self);
+        }
+    }
+
+    fn g(_: &mut &()) {}
+}
+
+// https://github.com/dtolnay/async-trait/issues/281
+#[rustversion::since(1.75)]
+pub mod issue281 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Trait {
+        type Error;
+        async fn method(&self) -> Result<impl AsRef<str> + Send + Sync, Self::Error>;
+    }
+
+    pub struct T;
+
+    #[async_trait]
+    impl Trait for T {
+        type Error = ();
+        async fn method(&self) -> Result<impl AsRef<str> + Send + Sync, Self::Error> {
+            Ok("Hello World")
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/283
+pub mod issue283 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Trait {
+        async fn a();
+    }
+
+    pub trait Bound {
+        fn b();
+    }
+
+    #[async_trait]
+    impl<T: Bound> Trait for T {
+        async fn a() {
+            Self::b();
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/288
+pub mod issue288 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Trait {
+        async fn f<#[cfg(any())] T: Send>(#[cfg(any())] t: T);
+        async fn g<#[cfg(all())] T: Send>(#[cfg(all())] t: T);
+    }
+
+    pub struct Struct;
+
+    #[async_trait]
+    impl Trait for Struct {
+        async fn f<#[cfg(any())] T: Send>(#[cfg(any())] t: T) {}
+        async fn g<#[cfg(all())] T: Send>(#[cfg(all())] t: T) {
+            let _ = t;
+        }
+    }
+}
+
+// https://github.com/dtolnay/async-trait/issues/300
+pub mod issue300 {
+    use async_trait::async_trait;
+
+    #[async_trait]
+    pub trait Trait {
+        async fn f(&mut self) -> ();
+    }
+
+    pub struct Thing;
+
+    #[async_trait]
+    impl Trait for Thing {
+        async fn f(&mut self) -> () {
+            let _ = &mut self;
         }
     }
 }

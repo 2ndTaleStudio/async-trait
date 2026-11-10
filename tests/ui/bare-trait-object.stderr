@@ -1,11 +1,15 @@
-error: trait objects without an explicit `dyn` are deprecated
-  --> $DIR/bare-trait-object.rs:11:16
+error[E0782]: expected a type, found a trait
+  --> tests/ui/bare-trait-object.rs:11:16
    |
 11 | impl Trait for Send + Sync {
-   |                ^^^^^^^^^^^ help: use `dyn`: `dyn Send + Sync`
+   |                ^^^^^^^^^^^
    |
-note: the lint level is defined here
-  --> $DIR/bare-trait-object.rs:1:9
+help: you can add the `dyn` keyword if you want a trait object
    |
-1  | #![deny(bare_trait_objects)]
-   |         ^^^^^^^^^^^^^^^^^^
+11 | impl Trait for dyn Send + Sync {
+   |                +++
+help: alternatively use a blanket implementation to implement `Trait` for all types that also implement `Send + Sync`
+   |
+11 - impl Trait for Send + Sync {
+11 + impl<T: Send + Sync> Trait for T {
+   |
